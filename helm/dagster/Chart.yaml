@@ -31,7 +31,7 @@ dependencies:
     condition: redis.internal
 maintainers:
   - name: Elementl
-    email: support@elementl.com
+    email: support@dagsterlabs.com
     url: https://elementl.com
 icon: https://elementl.com/icons/social/dagster.jpg
 appVersion: dev
