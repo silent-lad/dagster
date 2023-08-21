@@ -266,7 +266,6 @@ class DagsterDaemonController(AbstractContextManager):
 
     def check_daemon_loop(self) -> None:
         start_time = time.time()
-        last_heartbeat_check_time = start_time
         last_workspace_update_time = start_time
         while True:
             with raise_interrupts_as(KeyboardInterrupt):
@@ -279,22 +278,6 @@ class DagsterDaemonController(AbstractContextManager):
                         self._grpc_server_registry.clear_all_grpc_endpoints()
                     self._workspace_process_context.refresh_workspace()
                     last_workspace_update_time = time.time()
-
-                if self._instance.daemon_skip_heartbeats_without_errors:
-                    # If we're skipping heartbeats without errors, we just check the threads.
-                    # If there's no errors, the daemons won't be writing heartbeats.
-                    continue
-
-                now = time.time()
-                # Give the daemon enough time to send an initial heartbeat before checking
-                if (
-                    (now - start_time) < 2 * self._heartbeat_interval_seconds
-                    or now - last_heartbeat_check_time < HEARTBEAT_CHECK_INTERVAL
-                ):
-                    continue
-
-                self.check_daemon_heartbeats()
-                last_heartbeat_check_time = time.time()
 
     def __exit__(
         self,
