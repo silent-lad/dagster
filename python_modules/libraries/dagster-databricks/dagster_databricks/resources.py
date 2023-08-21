@@ -9,6 +9,7 @@ from dagster._core.definitions.resource_definition import dagster_maintained_res
 from pydantic import Field
 
 from .databricks import DatabricksClient
+from .external_resource import DatabricksExecutionResource as DatabricksExecutionResource
 
 
 class DatabricksClientResource(ConfigurableResource, IAttachDifferentObjectToOpContext):

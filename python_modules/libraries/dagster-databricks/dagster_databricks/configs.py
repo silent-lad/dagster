@@ -658,8 +658,9 @@ def _define_spark_python_task() -> Field:
     python_file = Field(
         String,
         description=(
-            "The URI of the Python file to be executed. DBFS and S3 paths are supported."
-            "This field is required."
+            "The URI of the Python file to be executed. DBFS and S3 paths are supported. If a"
+            " `git_source` is set, then the path is relative to the git source root.This field is"
+            " required."
         ),
         is_required=True,
     )
@@ -669,7 +670,20 @@ def _define_spark_python_task() -> Field:
         is_required=False,
         default_value=[],
     )
-    return Field(Shape(fields={"python_file": python_file, "parameters": parameters}))
+    git_source = Field(
+        Shape(
+            fields={
+                "git_url": Field(String, description="The URL of the git repository."),
+                "git_branch": Field(String, description="The git branch to use."),
+            },
+        ),
+        description="The git repository/branch with which to resolve the `python_file` path.",
+    )
+    return Field(
+        Shape(
+            fields={"python_file": python_file, "parameters": parameters, "git_source": git_source}
+        )
+    )
 
 
 def _define_spark_submit_task() -> Field:

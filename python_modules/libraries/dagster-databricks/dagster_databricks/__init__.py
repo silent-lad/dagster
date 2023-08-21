@@ -26,6 +26,7 @@ from .ops import (
 )
 from .resources import (
     DatabricksClientResource as DatabricksClientResource,
+    DatabricksExecutionResource as DatabricksExecutionResource,
     databricks_client as databricks_client,
 )
 from .version import __version__

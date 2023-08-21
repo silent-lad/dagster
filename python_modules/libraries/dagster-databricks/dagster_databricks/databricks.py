@@ -32,7 +32,9 @@ class DatabricksError(Exception):
 class DatabricksClient:
     """A thin wrapper over the Databricks REST API."""
 
-    def __init__(self, host: str, token: str, workspace_id: Optional[str] = None):
+    def __init__(
+        self, host: Optional[str], token: Optional[str], workspace_id: Optional[str] = None
+    ):
         self.host = host
         self.workspace_id = workspace_id
 
@@ -276,13 +278,13 @@ class DatabricksJobRunner:
 
     def __init__(
         self,
-        host: str,
-        token: str,
+        host: Optional[str],
+        token: Optional[str],
         poll_interval_sec: float = 5,
         max_wait_time_sec: int = DEFAULT_RUN_MAX_WAIT_TIME_SEC,
     ):
-        self.host = check.str_param(host, "host")
-        self.token = check.str_param(token, "token")
+        self.host = check.opt_str_param(host, "host")
+        self.token = check.opt_str_param(token, "token")
         self.poll_interval_sec = check.numeric_param(poll_interval_sec, "poll_interval_sec")
         self.max_wait_time_sec = check.int_param(max_wait_time_sec, "max_wait_time_sec")
 
@@ -305,14 +307,15 @@ class DatabricksJobRunner:
         if new_cluster:
             new_cluster = new_cluster.copy()
 
-            nodes = new_cluster.pop("nodes")
-            if "instance_pool_id" in nodes:
-                new_cluster["instance_pool_id"] = nodes["instance_pool_id"]
-            else:
-                node_types = nodes["node_types"]
-                new_cluster["node_type_id"] = node_types["node_type_id"]
-                if "driver_node_type_id" in node_types:
-                    new_cluster["driver_node_type_id"] = node_types["driver_node_type_id"]
+            nodes = new_cluster.pop("nodes", None)
+            if nodes:
+                if "instance_pool_id" in nodes:
+                    new_cluster["instance_pool_id"] = nodes["instance_pool_id"]
+                else:
+                    node_types = nodes["node_types"]
+                    new_cluster["node_type_id"] = node_types["node_type_id"]
+                    if "driver_node_type_id" in node_types:
+                        new_cluster["driver_node_type_id"] = node_types["driver_node_type_id"]
 
             cluster_size = new_cluster.pop("size")
             if "num_workers" in cluster_size:
@@ -323,7 +326,8 @@ class DatabricksJobRunner:
             tags = new_cluster.get("custom_tags", {})
             if isinstance(tags, list):
                 tags = {x["key"]: x["value"] for x in tags}
-            tags["__dagster_version"] = dagster.__version__
+            version = "dev" if dagster.__version__.startswith("1!") else dagster.__version__
+            tags["__dagster_version"] = version
             new_cluster["custom_tags"] = tags
 
         check.invariant(
@@ -367,20 +371,35 @@ class DatabricksJobRunner:
             == 1,
             "Multiple tasks specified in Databricks run",
         )
+        task_dict = dict(task)
+        raw_git_source = task_dict.pop("git_source", None)
+        raw_git_source["git_provider"] = "gitHub"
+        git_source = jobs.GitSource.from_dict(raw_git_source) if raw_git_source else None
 
+        # Cargo-culting the attrs of jobs created in databricks UI
+        new_cluster["aws_attributes"] = {
+            "first_on_demand": 1,
+            "availability": "SPOT_WITH_FALLBACK",
+            "zone_id": "us-west-1b",
+            "spot_bid_price_percent": 100,
+            "ebs_volume_count": 0,
+        }
+
+        tasks = [
+            jobs.SubmitTask.from_dict(
+                {
+                    "new_cluster": new_cluster,
+                    "existing_cluster_id": existing_cluster_id,
+                    "libraries": libraries,
+                    **task_dict,
+                },
+            )
+        ]
+        print("TASKS", tasks)
         return self.client.workspace_client.jobs.submit(
+            git_source=git_source,
             run_name=run_config.get("run_name"),
-            tasks=[
-                jobs.SubmitTask.from_dict(
-                    {
-                        "new_cluster": new_cluster,
-                        "existing_cluster_id": existing_cluster_id,
-                        # "libraries": [compute.Library.from_dict(lib) for lib in libraries],
-                        "libraries": libraries,
-                        **task,
-                    },
-                )
-            ],
+            tasks=tasks,
         ).bind()["run_id"]
 
     def retrieve_logs_for_run_id(

@@ -43,6 +43,7 @@ def test_databricks_submit_job_existing_cluster(mock_submit_run, databricks_run_
 
     runner.submit_run(databricks_run_config, task)
     mock_submit_run.assert_called_with(
+        git_source=None,
         run_name=databricks_run_config["run_name"],
         tasks=[expected_task],
     )
@@ -52,6 +53,7 @@ def test_databricks_submit_job_existing_cluster(mock_submit_run, databricks_run_
 
     runner.submit_run(databricks_run_config, task)
     mock_submit_run.assert_called_with(
+        git_source=None,
         run_name=databricks_run_config["run_name"],
         tasks=[expected_task],
     )
@@ -96,6 +98,7 @@ def test_databricks_submit_job_new_cluster(mock_submit_run, databricks_run_confi
 
     runner.submit_run(databricks_run_config, task)
     mock_submit_run.assert_called_once_with(
+        git_source=None,
         run_name=databricks_run_config["run_name"],
         tasks=[expected_task],
     )
