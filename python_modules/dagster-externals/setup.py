@@ -38,6 +38,7 @@ setup(
     extras_require={
         "test": [
             f"dagster{pin}",
+            "jsonschema",
         ]
     },
     zip_safe=False,

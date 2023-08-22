@@ -1,5 +1,8 @@
+import json
+import os
 from unittest.mock import MagicMock
 
+import jsonschema
 import pytest
 from dagster_externals._context import ExternalExecutionContext
 from dagster_externals._protocol import (
@@ -23,11 +26,18 @@ TEST_EXTERNAL_EXECUTION_CONTEXT_DEFAULTS = ExternalExecutionContextData(
     extras={},
 )
 
+JSON_SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "../externals_protocol_schema.json")
+
+with open(JSON_SCHEMA_PATH) as f:
+    JSON_SCHEMA = json.load(f)
+
 
 def _make_external_execution_context(**kwargs):
-    kwargs = {**TEST_EXTERNAL_EXECUTION_CONTEXT_DEFAULTS, **kwargs}
+    data = ExternalExecutionContextData(**{**TEST_EXTERNAL_EXECUTION_CONTEXT_DEFAULTS, **kwargs})
+    # This will error if the context doesn't match the schema
+    jsonschema.validate(data, JSON_SCHEMA)
     return ExternalExecutionContext(
-        data=ExternalExecutionContextData(**kwargs),
+        data=data,
         output_stream=MagicMock(),
     )
 
@@ -139,3 +149,13 @@ def test_extras_context():
     assert context.get_extra("foo") == "bar"
     with pytest.raises(DagsterExternalError, match="Extra `bar` is undefined"):
         context.get_extra("bar")
+
+
+def test_notification_json_schema_validation():
+    notification = {"method": "foo", "params": {"bar": "baz"}}
+    jsonschema.validate(notification, JSON_SCHEMA)
+
+
+def test_json_schema_rejects_invalid():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"foo": "bar"}, JSON_SCHEMA)

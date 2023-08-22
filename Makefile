@@ -92,3 +92,6 @@ check_manifest:
 	check-manifest python_modules/dagster-webserver
 	check-manifest python_modules/dagster-graphql
 	ls python_modules/libraries | xargs -n 1 -Ipkg check-manifest python_modules/libraries/pkg
+
+externals_json_schema:
+	python scripts/generate_externals_json_schema.py
