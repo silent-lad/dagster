@@ -260,12 +260,12 @@ class SqliteEventLogStorage(SqlEventLogStorage, ConfigurableClass):
 
             self.store_asset_event_tags(event, event_id)
 
-    def get_event_records(
+    def _get_event_records(
         self,
         event_records_filter: EventRecordsFilter,
         limit: Optional[int] = None,
         ascending: bool = False,
-    ) -> Iterable[EventLogRecord]:
+    ) -> Sequence[EventLogRecord]:
         """Overridden method to enable cross-run event queries in sqlite.
 
         The record id in sqlite does not auto increment cross runs, so instead of fetching events
