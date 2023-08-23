@@ -975,26 +975,26 @@ class StepExecutionContext(PlanExecutionContext, IStepContext):
         else:
             return None
 
-    def _get_input_asset_event(self, key: AssetKey, retries: int = 0) -> Optional["EventLogRecord"]:
-        from dagster._core.definitions.data_version import (
-            extract_data_version_from_entry,
-        )
+    def _get_input_asset_event(self, key: AssetKey) -> Optional["EventLogRecord"]:
+        from dagster._core.events import DagsterEventType
 
-        is_step_internal_input = key in self._data_version_cache
-        event = self.instance.get_latest_data_version_record(key)
-        if event is None and is_step_internal_input and retries <= 5:
-            return self._get_input_asset_event(key, retries + 1)
-        elif event is None:
-            return None
+        # step-internal input
+        if key in self._data_version_cache:  # cannot be an observation
+            cursor = None
+            records = []
+            while True:
+                connection = self.instance.get_records_for_run(
+                    self.run_id, of_type={DagsterEventType.ASSET_MATERIALIZATION}, cursor=cursor
+                )
+                records.extend(connection.records)
+                cursor = connection.cursor
+                if not connection.has_more:
+                    break
+            # Guaranteed to exist if key is in data_version_cache
+            event = next((r for r in records if r.asset_key == key and r.asset_materialization))
         else:
-            # The cache gets populated for inputs generated during the current step. We need to keep
-            # reloading the latest event until the data version matches the one in the cache to ensure
-            # the storage id reflects the input actually used.
-            data_version = extract_data_version_from_entry(event.event_log_entry)
-            if is_step_internal_input and data_version != self._data_version_cache[key]:
-                return self._get_input_asset_event(key, retries + 1)
-            else:
-                return event
+            event = self.instance.get_latest_data_version_record(key)
+        return event
 
     def _get_partitions_data_version_from_keys(
         self, key: AssetKey, partition_keys: Sequence[str]
