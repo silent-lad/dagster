@@ -16,6 +16,7 @@ from typing import (
     Tuple,
     cast,
 )
+from dagster._core.definitions.asset_graph_subset import AssetGraphSubset
 
 import pendulum
 
@@ -291,6 +292,7 @@ class AssetDaemonContext:
         AutoMaterializeAssetEvaluation,
         AbstractSet[AssetKeyPartitionKey],
         AbstractSet[AssetKeyPartitionKey],
+        AbstractSet[AssetKeyPartitionKey],
     ]:
         """Evaluates the auto materialize policy of a given asset key.
 
@@ -307,6 +309,7 @@ class AssetDaemonContext:
             - An AutoMaterializeAssetEvaluation object representing serializable information about
                 this evaluation.
             - The set of AssetKeyPartitionKeys that should be materialized.
+            - The set of AssetKeyPartitionKeys that should be skipped.
             - The set of AssetKeyPartitionKeys that should be discarded.
         """
         auto_materialize_policy = check.not_none(
@@ -318,6 +321,7 @@ class AssetDaemonContext:
             Tuple[AutoMaterializeRuleEvaluation, AbstractSet[AssetKeyPartitionKey]]
         ] = []
         # a set of asset partitions that should be materialized, skipped, or discarded
+        net_new_to_materialize: Set[AssetKeyPartitionKey] = set()
         to_materialize: Set[AssetKeyPartitionKey] = set()
         to_skip: Set[AssetKeyPartitionKey] = set()
         to_discard: Set[AssetKeyPartitionKey] = set()
@@ -330,14 +334,17 @@ class AssetDaemonContext:
             will_materialize_mapping=will_materialize_mapping,
             expected_data_time_mapping=expected_data_time_mapping,
             candidates=set(),
+            new_candidates=set(),
             daemon_context=self,
         )
 
         for materialize_rule in auto_materialize_policy.materialize_rules:
             rule_snapshot = materialize_rule.to_snapshot()
-            for evaluation_data, asset_partitions in materialize_rule.evaluate_for_asset(
+            net_new_results, previous_results = materialize_rule.evaluate_for_asset_full(
                 materialize_context
-            ):
+            )
+            for evaluation_data, asset_partitions in previous_results:
+                to_materialize.update(asset_partitions)
                 all_results.append(
                     (
                         AutoMaterializeRuleEvaluation(
@@ -346,11 +353,21 @@ class AssetDaemonContext:
                         asset_partitions,
                     )
                 )
+            for evaluation_data, asset_partitions in net_new_results:
                 to_materialize.update(asset_partitions)
+                net_new_to_materialize.update(asset_partitions)
+                all_results.append(
+                    (
+                        AutoMaterializeRuleEvaluation(
+                            rule_snapshot=rule_snapshot, evaluation_data=evaluation_data
+                        ),
+                        asset_partitions,
+                    )
+                )
 
         # These should be conditions, but aren't currently, so we just manually strip out things
         # from our materialization set
-        for candidate in list(to_materialize):
+        for candidate in list(net_new_to_materialize):
             if (
                 # must not be part of an active asset backfill
                 candidate in self.instance_queryer.get_active_backfill_target_asset_graph_subset()
@@ -365,12 +382,14 @@ class AssetDaemonContext:
                 )
                 > 0
             ):
-                to_materialize.remove(candidate)
+                net_new_to_materialize.remove(candidate)
                 for rule_evaluation_data, asset_partitions in all_results:
                     all_results.remove((rule_evaluation_data, asset_partitions))
                     all_results.append((rule_evaluation_data, asset_partitions - {candidate}))
 
-        skip_context = materialize_context._replace(candidates=to_materialize)
+        skip_context = materialize_context._replace(
+            candidates=to_materialize, new_candidates=net_new_to_materialize
+        )
 
         for skip_rule in auto_materialize_policy.skip_rules:
             rule_snapshot = skip_rule.to_snapshot()
@@ -418,6 +437,7 @@ class AssetDaemonContext:
                 dynamic_partitions_store=self.instance_queryer,
             ),
             to_materialize,
+            to_skip,
             to_discard,
         )
 
@@ -427,10 +447,14 @@ class AssetDaemonContext:
         Mapping[AssetKey, AutoMaterializeAssetEvaluation],
         AbstractSet[AssetKeyPartitionKey],
         AbstractSet[AssetKeyPartitionKey],
+        AssetGraphSubset,
     ]:
         """Returns a mapping from asset key to the AutoMaterializeAssetEvaluation for that key, as
         well as a set of all asset partitions that should be materialized this tick.
         """
+        unhandled_graph_subset = self.cursor.unhandled_asset_graph_subset or AssetGraphSubset(
+            self.asset_graph
+        )
         evaluations_by_key: Dict[AssetKey, AutoMaterializeAssetEvaluation] = {}
         will_materialize_mapping: Dict[AssetKey, AbstractSet[AssetKeyPartitionKey]] = defaultdict(
             set
@@ -442,9 +466,10 @@ class AssetDaemonContext:
             # an asset may have already been visited if it was part of a non-subsettable multi-asset
             if asset_key not in self.target_asset_keys or asset_key in visited_multi_asset_keys:
                 continue
-            (evaluation, to_materialize_for_asset, to_discard_for_asset) = self.evaluate_asset(
-                asset_key, will_materialize_mapping, expected_data_time_mapping
+            (evaluation, to_materialize_for_asset, to_skip_for_asset, to_discard_for_asset) = (
+                self.evaluate_asset(asset_key, will_materialize_mapping, expected_data_time_mapping)
             )
+            unhandled_graph_subset |= to_skip_for_asset
             evaluations_by_key[asset_key] = evaluation
             will_materialize_mapping[asset_key] = to_materialize_for_asset
             to_discard.update(to_discard_for_asset)
@@ -466,13 +491,21 @@ class AssetDaemonContext:
                     will_materialize_mapping[neighbor_key] = {
                         ap._replace(asset_key=neighbor_key) for ap in to_materialize_for_asset
                     }
+                    unhandled_graph_subset |= {
+                        ap._replace(asset_key=neighbor_key) for ap in to_skip_for_asset
+                    }
                     to_discard.update(
                         {ap._replace(asset_key=neighbor_key) for ap in to_discard_for_asset}
                     )
                     expected_data_time_mapping[neighbor_key] = expected_data_time
                     visited_multi_asset_keys.add(neighbor_key)
 
-        return evaluations_by_key, set().union(*will_materialize_mapping.values()), to_discard
+        return (
+            evaluations_by_key,
+            set().union(*will_materialize_mapping.values()),
+            to_discard,
+            unhandled_graph_subset,
+        )
 
     def evaluate(
         self,
@@ -489,7 +522,9 @@ class AssetDaemonContext:
             else []
         )
 
-        evaluations, to_materialize, to_discard = self.get_auto_materialize_asset_evaluations()
+        evaluations, to_materialize, to_discard, unhandled_graph_subset = (
+            self.get_auto_materialize_asset_evaluations()
+        )
 
         run_requests = [
             *build_run_requests(
@@ -521,6 +556,7 @@ class AssetDaemonContext:
                     for asset_key in cast(Sequence[AssetKey], run_request.asset_selection)
                 ],
                 observe_request_timestamp=observe_request_timestamp,
+                unhandled_graph_subset=unhandled_graph_subset,
             ),
             # only record evaluations where something happened
             [
