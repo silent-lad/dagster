@@ -41,6 +41,7 @@ from dagster._core.storage.dagster_run import (
 )
 from dagster._core.storage.tags import PARTITION_NAME_TAG
 from dagster._utils.cached_method import cached_method
+from dagster._core.scheduler.instigation import AutoMaterializeAssetEvaluationRecord
 
 if TYPE_CHECKING:
     from dagster._core.storage.event_log import EventLogRecord
@@ -534,6 +535,10 @@ class CachingInstanceQueryer(DynamicPartitionsStore):
     def has_dynamic_partition(self, partitions_def_name: str, partition_key: str) -> bool:
         return partition_key in self.get_dynamic_partitions(partitions_def_name)
 
+    ######################
+    # AUTO MATERIALIZATION
+    ######################
+
     def asset_partitions_with_newly_updated_parents_and_new_latest_storage_id(
         self,
         latest_storage_id: Optional[int],
@@ -676,10 +681,6 @@ class CachingInstanceQueryer(DynamicPartitionsStore):
                 result_latest_storage_id = asset_latest_storage_id
 
         return (result_asset_partitions, result_latest_storage_id)
-
-    ####################
-    # RECONCILIATION
-    ####################
 
     def _asset_partitions_data_versions(
         self,
@@ -881,3 +882,20 @@ class CachingInstanceQueryer(DynamicPartitionsStore):
                 )
             )
         return root_unreconciled_ancestors
+
+    @cached_method
+    def get_previous_asset_evaluation_record(
+        self, asset_key: AssetKey
+    ) -> Optional["AutoMaterializeAssetEvaluationRecord"]:
+        schedule_storage = self.instance.schedule_storage
+        if schedule_storage is None:
+            return None
+        evaluation_record = next(
+            iter(
+                schedule_storage.get_auto_materialize_asset_evaluations(
+                    asset_key=asset_key, limit=1
+                )
+            ),
+            None,
+        )
+        return evaluation_record

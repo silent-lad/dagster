@@ -17,6 +17,7 @@ from typing import (
 
 import dagster._check as check
 from dagster._core.definitions.events import AssetKey, AssetKeyPartitionKey
+from dagster._core.definitions.asset_graph_subset import AssetGraphSubset
 
 from .asset_graph import AssetGraph
 from .partition import (
@@ -52,6 +53,7 @@ class AssetDaemonCursor(NamedTuple):
     handled_root_partitions_by_asset_key: Mapping[AssetKey, PartitionsSubset]
     evaluation_id: int
     last_observe_request_timestamp_by_asset_key: Mapping[AssetKey, float]
+    unhandled_asset_graph_subset: AssetGraphSubset
 
     def was_previously_handled(self, asset_key: AssetKey) -> bool:
         return asset_key in self.handled_root_asset_keys
