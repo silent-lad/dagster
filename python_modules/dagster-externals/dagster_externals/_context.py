@@ -1,21 +1,19 @@
-import atexit
-import json
-import os
 import warnings
-from typing import Any, ClassVar, Mapping, Optional, Sequence, TextIO
+from typing import Any, ClassVar, Mapping, Optional, Sequence
 
 from typing_extensions import Self
 
-from ._params import get_external_execution_params
+from ._io.base import ExternalExecutionContextSource, ExternalExecutionMessageSink
+from ._io.default import ExternalExecutionFileContextSource, ExternalExecutionFileMessageSink
 from ._protocol import (
-    DAGSTER_EXTERNALS_ENV_KEYS,
-    ExternalDataProvenance,
     ExternalExecutionContextData,
-    ExternalPartitionKeyRange,
-    ExternalTimeWindow,
-    Notification,
+    ExternalExecutionDataProvenance,
+    ExternalExecutionMessage,
+    ExternalExecutionPartitionKeyRange,
+    ExternalExecutionTimeWindow,
 )
 from ._util import (
+    DagsterExternalsWarning,
     assert_defined_asset_property,
     assert_defined_extra,
     assert_defined_partition_property,
@@ -23,46 +21,34 @@ from ._util import (
     assert_param_type,
     assert_param_value,
     assert_single_asset,
+    emit_orchestration_inactive_warning,
+    get_mock,
+    is_dagster_orchestration_active,
 )
 
+# The same "orchestration inactive" warning can be emitted from multiple APIs, so we ensure it is
+# only shown once.
+warnings.simplefilter("once", category=DagsterExternalsWarning)
 
-def is_dagster_orchestration_active() -> bool:
-    return bool(os.getenv(DAGSTER_EXTERNALS_ENV_KEYS["is_orchestration_active"]))
 
-
-def init_dagster_externals() -> "ExternalExecutionContext":
+def init_dagster_externals(
+    *,
+    context_source: Optional[ExternalExecutionContextSource] = None,
+    message_sink: Optional[ExternalExecutionMessageSink] = None,
+) -> "ExternalExecutionContext":
     if ExternalExecutionContext.is_initialized():
         return ExternalExecutionContext.get()
 
     if is_dagster_orchestration_active():
-        params = get_external_execution_params()
-        data = _read_input(params.input_path)
-        output_stream = _get_output_stream(params.output_path)
-        atexit.register(_close_stream, output_stream)
-        context = ExternalExecutionContext(data, output_stream)
+        context_source = context_source or ExternalExecutionFileContextSource.from_env()
+        message_sink = message_sink or ExternalExecutionFileMessageSink.from_env()
+        data = context_source.load_context()
+        context = ExternalExecutionContext(data, message_sink)
     else:
-        from unittest.mock import MagicMock
-
-        warnings.warn(
-            "This process was not launched by a Dagster orchestration process. All calls to the"
-            " `dagster-externals` context are no-ops."
-        )
-        context = MagicMock()
+        emit_orchestration_inactive_warning()
+        context = get_mock()
     ExternalExecutionContext.set(context)
     return context
-
-
-def _read_input(path: str) -> ExternalExecutionContextData:
-    with open(path, "r") as f:
-        return json.load(f)
-
-
-def _get_output_stream(path: str) -> TextIO:
-    return open(path, "a")
-
-
-def _close_stream(stream) -> None:
-    stream.close()
 
 
 class ExternalExecutionContext:
@@ -85,14 +71,15 @@ class ExternalExecutionContext:
             )
         return cls._instance
 
-    def __init__(self, data: ExternalExecutionContextData, output_stream: TextIO) -> None:
+    def __init__(
+        self, data: ExternalExecutionContextData, output_writer: ExternalExecutionMessageSink
+    ) -> None:
         self._data = data
-        self._output_stream = output_stream
+        self._output_writer = output_writer
 
     def _send_notification(self, method: str, params: Optional[Mapping[str, Any]] = None) -> None:
-        notification = Notification(method=method, params=params)
-        self._output_stream.write(json.dumps(notification) + "\n")
-        self._output_stream.flush()
+        notification = ExternalExecutionMessage(method=method, params=params)
+        self._output_writer.send_notification(notification)
 
     # ########################
     # ##### PUBLIC API
@@ -114,7 +101,7 @@ class ExternalExecutionContext:
         return asset_keys
 
     @property
-    def provenance(self) -> Optional[ExternalDataProvenance]:
+    def provenance(self) -> Optional[ExternalExecutionDataProvenance]:
         provenance_by_asset_key = assert_defined_asset_property(
             self._data["provenance_by_asset_key"], "provenance"
         )
@@ -122,7 +109,7 @@ class ExternalExecutionContext:
         return list(provenance_by_asset_key.values())[0]
 
     @property
-    def provenance_by_asset_key(self) -> Mapping[str, Optional[ExternalDataProvenance]]:
+    def provenance_by_asset_key(self) -> Mapping[str, Optional[ExternalExecutionDataProvenance]]:
         provenance_by_asset_key = assert_defined_asset_property(
             self._data["provenance_by_asset_key"], "provenance_by_asset_key"
         )
@@ -155,14 +142,14 @@ class ExternalExecutionContext:
         return partition_key
 
     @property
-    def partition_key_range(self) -> Optional["ExternalPartitionKeyRange"]:
+    def partition_key_range(self) -> Optional["ExternalExecutionPartitionKeyRange"]:
         partition_key_range = assert_defined_partition_property(
             self._data["partition_key_range"], "partition_key_range"
         )
         return partition_key_range
 
     @property
-    def partition_time_window(self) -> Optional["ExternalTimeWindow"]:
+    def partition_time_window(self) -> Optional["ExternalExecutionTimeWindow"]:
         # None is a valid value for partition_time_window, but we check that a partition key range
         # is defined.
         assert_defined_partition_property(
