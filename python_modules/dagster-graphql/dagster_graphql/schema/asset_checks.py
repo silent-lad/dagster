@@ -73,10 +73,14 @@ class GrapheneAssetCheckExecution(graphene.ObjectType):
     class Meta:
         name = "AssetCheckExecution"
 
-    def __init__(self, execution: AssetCheckExecutionRecord):
+    def __init__(self, graphene_info: ResolveInfo, execution: AssetCheckExecutionRecord):
+        from dagster_graphql.implementation.fetch_asset_checks import (
+            get_asset_check_execution_status,
+        )
+
         self.id = execution.id
         self.runId = execution.run_id
-        self.status = execution.status
+        self.status = get_asset_check_execution_status(graphene_info.context.instance, execution)
         self.evaluation = (
             GrapheneAssetCheckEvaluation(execution.evaluation_event)
             if execution.evaluation_event
@@ -119,7 +123,7 @@ class GrapheneAssetCheck(graphene.ObjectType):
             cursor=kwargs.get("cursor"),
         )
 
-        return [GrapheneAssetCheckExecution(e) for e in executions]
+        return [GrapheneAssetCheckExecution(graphene_info, e) for e in executions]
 
 
 class GrapheneAssetChecks(graphene.ObjectType):

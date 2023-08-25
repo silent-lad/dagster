@@ -7,7 +7,9 @@ from dagster import EventLogEntry
 class AssetCheckExecutionStatus(enum.Enum):
     PLANNED = "PLANNED"
     SUCCESS = "SUCCESS"
-    FAILURE = "FAILURE"
+    FAILURE = "FAILURE"  # explicit fail result
+    RUN_FAILURE = "RUN_FAILURE"  # hit some exception
+    SKIPPED = "SKIPPED"  # the run finished, didn't fail, but the check didn't execute
 
 
 class AssetCheckExecutionRecord(NamedTuple):
